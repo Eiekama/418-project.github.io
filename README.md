@@ -31,7 +31,7 @@ A naive SPH implementation involves a forward Euler integrator with two main ker
 - **Forward Euler Integration**: For each particle, we will perform naive euler integration:
 $$ \mathbf{v}_i^{new} = \mathbf{v}_i + \frac{dt \cdot \mathbf{F}_i}{\rho_i} $$
 $$ \mathbf{p}_i^{new} = \mathbf{p}_i + dt \cdot \mathbf{v}_i $$
-<!-- Refer to Ihmsen2014SPH for more algorithmic details on how this works. -->
+Refer to [[1]](#1) for more algorithmic details on how this works.
 
 #### Computationally Expensive Parts
 The most computationally expensive parts of the SPH algorithm are:
@@ -90,7 +90,7 @@ You can see the renderer starts off fast, but when particles clump together, it 
 
 ## Approach
 
-Our journey started with a naive implementation <!-- based on \cite{schuermann2017sph2d} --> that is sequential and trivially parallelizable:
+Our journey started with a naive implementation based on [[3]](#3) that is sequential and trivially parallelizable:
 ```c++
 // m_Particles : Vector<Particle>(NUM_PARTICLES);
 // called each frame
@@ -121,13 +121,13 @@ struct Particle {
     float pressure;     // 4 bytes
 }
 ```
-A keen computer science student will discover that this is an incredibly inefficient algorithm of $O(n^2)$ computation cost. Fortunately, there is a widely used technique called spatial partioning. \cite{SPH_Tutorial_Introduction} has a pretty good slide deck on this topic, and we implemented all the techniques illustrated on that presentation. 
+A keen computer science student will discover that this is an incredibly inefficient algorithm of $O(n^2)$ computation cost. Fortunately, there is a widely used technique called spatial partioning. [[2]](#2) has a pretty good slide deck on this topic, and we implemented all the techniques illustrated on that presentation. 
 
 Spatial partitioning involves efficiently finding neighbors. We had an intuitive insight is to divide the simulation space into $m$ cells. Neighbors, then, must lie within the nearest 8 neighboring cells (or 26 for 3D applications). Sorting particles into grid/finding neighbors will come down to $O(m)$.
 
 This method worked, but it resulted in wasted space and lots of queries into empty memory cells.
 
-We found Spatial Hashing <!-- \cite{SPH_Tutorial_Introduction} --> to be a better alternative. In particular, we represent the simulation space as a sparse hashmap. We store only populated cells by using a 2D hashfunction $(i,j) \rightarrow [p_1, p_2...]$. A suitable hash function we chose as according to literature is 
+We found Spatial Hashing [[2]](#2) to be a better alternative. In particular, we represent the simulation space as a sparse hashmap. We store only populated cells by using a 2D hashfunction $(i,j) \rightarrow [p_1, p_2...]$. A suitable hash function we chose as according to literature is 
 ```c++
 int GetHash(float2 cell)
 {
@@ -141,7 +141,7 @@ What do we do?
 We decided to use compact hashing -- sort cells in secondary structure such that particles in the same cell are next to each other. We additionally used space-filling z-curve to further improve the locality computations.
 <figure>
     <p align="center">
-    <img src="z-curve.png" alt="Image illustrating space-filling z-curve" />
+    <img src="figures/z-curve.png" alt="Image illustrating space-filling z-curve" />
     <figcaption><p align="center">Figure 1: Useful to sort particles along Z-curve as well</figcaption>
 </figure>
 
@@ -314,7 +314,120 @@ struct alignas(32) Particle {
 ```
 Since 2 particles fit fully in a cache line, there is no need for additional padding to reduce false sharing.
 
-## Goals and Deliverables
+## Results
+We measured performance by simulating $40k$ particles (headless, no renderer or windowing function) over the first $T = 5$ seconds, taking the average simulation time $t_{avg} = t_{total} / T$. The particles were generated randomly in a uniform disk of Radius $W / 2$, where $W$ is the width and height of the simulation space (assume we simulate in a square).
+
+We are benchmarking on an *Intel(R) Core(TM) i7-12700k with 3.60 GHz clockspeed* CPU (this CPU has 8 performance cores designed for hyperthreading) and *NVIDIA GeForce RTX 3070 Ti 8GB* GPU.
+
+We first compare results using **32 threads** (this value was determined as the best performing thread count on our benchmark CPU on our most efficient algorithm). We do this just to get a hollistic understanding of all the techniques we explored in our project (including Naive and GPU acceleration). Then, we will compare different CPU techniques and their speedups in comparison with single threaded implementation (some techniques were omitted such as GPU is not applicable for comparison, and Naive implementations takes too long). We will benchmark speedup based on the slightly optimized *Uniform Grid-based Neighborhood Search* algorithm.
+
+<p align="center">
+
+| **Technique** | **Rendering Time (ms)** |
+| ------------- | ---------------------- |
+| Naive OMP $O(n^2)$ | 5360 |
+| Grid-based Neighborhood Search | 49 |
+| Naive Spatial Hashing (SH) | 81 |
+| Compact SH | 45 |
+| SH with Z-Order Sorting | 38 |
+| SH with Z-Order Sorting <br> + OMP Optimized* | 35 |
+| SH with Z-Order Sorting <br> + OMP Optimized* <br> + Parallel OMP Quicksort | 32 |
+| Naive GPU $O(n^2)$ | 190 |
+
+<p align="center">
+Table 1: Rendering time for different techniques
+
+<figure>
+    <p align="center">
+    <img src="figures/rendering times.png" alt="Graph showing time taken to compute a single frame for each method" />
+    <figcaption><p align="center">Figure 2: Simulation Acceleration Techniques Comparison</figcaption>
+</figure>
+
+<p align="center">
+
+| **Technique/Threadcount** | **32** | **16** | **8** | **4** | **2** |
+| ------------------------- | ------ | ------ | ----- | ----- | ----- |
+| Grid-based Neighborhood Search | 49 | 55 | 91 | 130 | 181 |
+| Naive Spatial Hashing (SH) | 81 | 101 | 123 | 219 | 313 |
+| Compact SH | 45 | 58 | 88 | 125 | 175 |
+| SH with Z-Order Sorting | 38 | 42  | 57  | 105 | 160 |
+| SH with Z-Order Sorting <br> + OMP Optimized* | 35 | 38 | 52 | 87 | 157 |
+| SH with Z-Order Sorting <br> + OMP Optimized* <br> + Parallel OMP Quicksort | 32 | 36 | 51 | 86 | 156 |
+
+<p align="center">
+Table 2: Rendering times for different techniques at various thread counts.
+
+<figure>
+    <p align="center">
+    <img src="figures/threads.png" alt="Graph showing time taken versus number of threads" />
+    <figcaption><p align="center">Figure 3: Comparison between thread counts on the CPU</figcaption>
+</figure>
+
+### Different problem sizes
+We tested on $40k$ particles as a standard, but problem sizes of $20k$ and $10k$ are also verified to have similar efficiency pattern using our most optimized method (SH with Z-Order Sorting + OMP Optimized + Parallel OMP Quicksort). However, due to our integration methods, anything beyond $40k$ will imediately become numerically unstable and the simulation breaks as a result of that (particles starts to fly everywhere).
+
+### Limitations
+
+Using Intel VTune, we profiled the threading profile of the application:
+<figure>
+    <p align="center">
+    <img src="figures/profile.png" alt="Table showing execution time of different functions" />
+    <figcaption><p align="center">Figure 4: Execution time distribution</figcaption>
+</figure>
+
+The results further showed the application spent 40.9\% time as Spin and Overhead Time. 
+<figure>
+    <p align="center">
+    <img src="figures/profile2.png" alt="Table showing spin time of different functions" />
+    <figcaption><p align="center">Figure 5: Profile spin time</figcaption>
+</figure>
+
+Similarly, a profile of top hot spots show the majority of time we are spending on synchronization.
+<figure>
+    <p align="center">
+    <img src="figures/profile3.png" alt="Graph showing time taken versus number of threads" />
+    <figcaption><p align="center">Figure 6: Hotspots</figcaption>
+</figure>
+
+The obvious conclusion is the program is synchronization-bound. However, why is that the case? Is it memory use patterns (caches), task scheduling overhead, or load imbalance?
+
+To figure out whats limiting our performance, we profiled each thread by the number of particles they processed (profiled on 32 threads) \ref{fig:workload} shows this. We see pretty even distribution of work, but the main thread taking on seemingly more tasks than the other threads. 
+
+<figure>
+    <p align="center">
+    <img src="figures/workload-distribution.png" alt="Graph showing particles processed by each thread" />
+    <figcaption><p align="center">Figure 7: Workload distribution</figcaption>
+</figure>
+
+We suspect the reasoning is as follows: there is significant variation in the amount of work per iteration or task (the particles starts off clustered together, which means each particle needs to compute more in each case). Although we already use dynamic scheduling, it will not always distribute the workload perfectly.
+
+We suspect the largest reason why such a high percentage of time is in spinning and waiting is the scheduling overhead. Unfortunately we were not able to profile memory usage on VTune due to unsolved technical issues (virtual driver or something). We think our spatial cache locality (reuse particles in the same cell, which are adjacent in memory), and temporal locality (process particles in chunks, accessing the same neighbors for all particles in the same chunk), as well as reducing false sharing (padding structures) are all well exploited. The synchronization costs here are high because maybe our application is more memory bound (each particle is not trivial -- 64 bytes) than compute bound, and the cost of scheduling $40k$ particles is non-trivial as well.
+
+### Future Improvements
+
+We investigated omp tasks and more fine grained parallelism to address the above issue. However, our machines seems to be unhappy about omp:llvm and when we compile it using that flag, the performance drops by 10x (not joking). However, we believe there is room for more fine grained parallelism which involves calculating cost zones and putting more workers in zones where the estimated amount of work is high. This is one unexplored section in our project.
+
+The other is algorithmic improvements. We believe, in especially clustered situations, we can estimate the effects of many particles in some radius $h_2$ as a single particle by computing a centroid of momentum. This could significantly reduce neighboring search cost at the expense of calculating an additional critical cell radius for each particle every frame ($O(N)$). However, this could reduce neighborhood search by a factor of $m$, where $m$ is the average number of clusters of radius $h_2$.
+
+For the deeper analysis, we profiled the simulation and found the majority of work ($93\%$) is spent in computing forces, density, pressure. Sorting only consists of $6\%$, and computing hashtables is the last 1\%.
+
+## References
+
+<a id="1">[1]</a>
+Markus Ihmsen, Jens Orthmann, Barbara Solenthaler, Andreas Kolb, and Matthias
+Teschner. Sph fluids in computer graphics. In Sylvain Lefebvre and Michela Spagnuolo,
+editors, Eurographics 2014 - State of the Art Reports, pages 21–42. The Eurographics
+Association, 2014.
+
+<a id="2">[2]</a>
+Matthias Teschner Dan Koschier Jan Bender, Barbara Solenthaler. Smoothed particle
+hydrodynamics: Techniques for the physics based simulation of fluids and solids, part i,
+n.d. Introduction, Foundations, Neighborhood Search.
+
+<a id="3">[3]</a>
+Lucas V. Schuermann. Implementing sph in 2d, Jul 2017.
+
+<!-- ## Goals and Deliverables
 
 ### Planned Goals
 
@@ -341,4 +454,4 @@ Since 2 particles fit fully in a cache line, there is no need for additional pad
 | Apr 14 - Apr 15 (Week 3) (Milestone Report due) | Gather analytic data.<br>Write report. |
 | Apr 16 - Apr 20 (Week 3) | Week 3.1: Explore fine grained parallelism with OpenMP tasks and cost zones. (Hank)<br>Week 3.1: GPU solver with naive per particle parallelism (Jingxuan)<br>Week 3.2: Exploit more locality by assigning threads to cells, not particles (Hank)<br>Week 3.2: Integrate spatial binning into GPU solver (Jingxuan) |
 | Apr 21 - Apr 27 (Week 4) | Week 4.1: Build UI (ImGui) for testing out different methods of parallelism for demo purposes (Hank)<br>Week 4.1: Explore if there’s ways that give better locality than what’s currently implemented to communicate data between CPU and GPU (Jingxuan)<br>Week 4.2: Project writeup, analytics data, make poster, write report. (Hank + Jingxuan) |
-| Apr 28 (Final Report due) | Update analytic data if necessary.<br>Write report.<br>Make poster. |
+| Apr 28 (Final Report due) | Update analytic data if necessary.<br>Write report.<br>Make poster. | -->
